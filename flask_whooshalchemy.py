@@ -1,23 +1,10 @@
-'''
-
-    whooshalchemy flask extension
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    Adds whoosh indexing capabilities to SQLAlchemy models for Flask
-    applications.
-
-    :copyright: (c) 2012 by Karl Gyllstrom
-    :license: BSD (see LICENSE.txt)
-
-'''
-
 from __future__ import with_statement
 from __future__ import absolute_import
 
-
 import flask_sqlalchemy as flask_sqlalchemy
-
 import sqlalchemy
+from sqlalchemy.sql import text
+
 
 from whoosh.qparser import OrGroup
 from whoosh.qparser import AndGroup
@@ -36,10 +23,6 @@ __searchable__ = '__searchable__'
 
 DEFAULT_WHOOSH_INDEX_NAME = 'whoosh_index'
 
-try:
-    unicode
-except NameError:
-    unicode = str
 
 class _QueryProxy(flask_sqlalchemy.BaseQuery):
     # We're replacing the model's ``query`` field with this proxy. The main
@@ -75,7 +58,7 @@ class _QueryProxy(flask_sqlalchemy.BaseQuery):
             # Whoosh
 
             heapq.heappush(ordered_by_whoosh_rank,
-                (self._whoosh_rank[unicode(getattr(row,
+                (self._whoosh_rank[str(getattr(row,
                     self._primary_key_name))], row))
 
         def _inner():
@@ -86,26 +69,22 @@ class _QueryProxy(flask_sqlalchemy.BaseQuery):
 
     def whoosh_search(self, query, limit=None, fields=None, or_=False):
         '''
-
         Execute text query on database. Results have a text-based
         match to the query, ranked by the scores from the underlying Whoosh
         index.
-
         By default, the search is executed on all of the indexed fields as an
         OR conjunction. For example, if a model has 'title' and 'content'
         indicated as ``__searchable__``, a query will be checked against both
         fields, returning any instance whose title or content are a content
         match for the query. To specify particular fields to be checked,
         populate the ``fields`` parameter with the desired fields.
-
         By default, results will only be returned if they contain all of the
         query terms (AND). To switch to an OR grouping, set the ``or_``
         parameter to ``True``.
-
         '''
-
-        if not isinstance(query, unicode):
-            query = unicode(query)
+            
+        if not isinstance(query, str):
+            query = str(query)
 
         results = self._whoosh_searcher(query, limit, fields, or_)
 
@@ -116,7 +95,7 @@ class _QueryProxy(flask_sqlalchemy.BaseQuery):
             # be a query.
 
             # XXX is this efficient?
-            return self.filter(sqlalchemy.text('null'))
+            return self.filter(text('null'))
 
         result_set = set()
         result_ranks = {}
@@ -156,7 +135,7 @@ class _Searcher(object):
 
 
 def whoosh_index(app, model):
-    ''' Create whoosh index for ``model``, if one does not exist. If
+    ''' Create whoosh index for ``model``, if one does not exist. If 
     the index exists it is opened and cached. '''
 
     # gets the whoosh index for this model, creating one if it does not exist.
@@ -168,16 +147,6 @@ def whoosh_index(app, model):
     return app.whoosh_indexes.get(model.__name__,
                 _create_index(app, model))
 
-def _get_analyzer(app, model):
-    analyzer = getattr(model, '__analyzer__', None)
-
-    if not analyzer and app.config.get('WHOOSH_ANALYZER'):
-        analyzer = app.config['WHOOSH_ANALYZER']
-
-    if not analyzer:
-        analyzer = StemmingAnalyzer()
-
-    return analyzer
 
 def _create_index(app, model):
     # a schema is created based on the fields of the model. Currently we only
@@ -196,8 +165,7 @@ def _create_index(app, model):
     wi = os.path.join(app.config.get('WHOOSH_BASE'),
             model.__name__)
 
-    analyzer = _get_analyzer(app, model)
-    schema, primary_key = _get_whoosh_schema_and_primary_key(model, analyzer)
+    schema, primary_key = _get_whoosh_schema_and_primary_key(model)
 
     if whoosh.index.exists_in(wi):
         indx = whoosh.index.open_dir(wi)
@@ -213,15 +181,14 @@ def _create_index(app, model):
 
     # change the query class of this model to our own
     model.query_class = _QueryProxy
-
+    
     return indx
 
 
-def _get_whoosh_schema_and_primary_key(model, analyzer):
+def _get_whoosh_schema_and_primary_key(model):
     schema = {}
     primary = None
     searchable = set(model.__searchable__)
-
     for field in model.__table__.columns:
         if field.primary_key:
             schema[field.name] = whoosh.fields.ID(stored=True, unique=True)
@@ -231,7 +198,8 @@ def _get_whoosh_schema_and_primary_key(model, analyzer):
                 (sqlalchemy.types.Text, sqlalchemy.types.String,
                     sqlalchemy.types.Unicode)):
 
-            schema[field.name] = whoosh.fields.TEXT(analyzer=analyzer)
+            schema[field.name] = whoosh.fields.TEXT(
+                    analyzer=StemmingAnalyzer())
 
     return Schema(**schema), primary
 
@@ -262,16 +230,24 @@ def _after_flush(app, changes):
                     attrs = {}
                     for key in searchable:
                         try:
-                            attrs[key] = unicode(getattr(v, key))
+                            attrs[key] = str(getattr(v, key))
                         except AttributeError:
                             raise AttributeError('{0} does not have {1} field {2}'
                                     .format(model, __searchable__, key))
 
-                    attrs[primary_field] = unicode(getattr(v, primary_field))
+                    attrs[primary_field] = str(getattr(v, primary_field))
                     writer.update_document(**attrs)
                 else:
-                    writer.delete_by_term(primary_field, unicode(getattr(v,
+                    writer.delete_by_term(primary_field, str(getattr(v,
                         primary_field)))
 
 
 flask_sqlalchemy.models_committed.connect(_after_flush)
+
+
+# def init_app(db):
+#     app = db.get_app()
+# #    for table in db.get_tables_for_bind():
+#     for item in globals():
+# 
+#        #_create_index(app, table)
